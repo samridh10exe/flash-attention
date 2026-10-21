@@ -537,12 +537,20 @@ inline __device__ void compute_dq_dk_dv_1colblock(const Params &params, const in
         if constexpr (Is_dropout) {
             int warp_id = tidx / 32;
             int block_row_idx = m_block * (kBlockM / 16) + warp_id % AtomLayoutMS;
-            // Need col to be multiples of 32, since we're doing dropout with block of 16 x 32
-            static_assert(MMA_N_SdP % 2 == 0);
-            int block_col_idx = n_block * (kBlockN / 32) + (warp_id / AtomLayoutMS) * (MMA_N_SdP / 2);
-            dropout.template apply_dropout</*encode_dropout_in_sign_bit=*/true>(
-                acc_s, block_row_idx, block_col_idx, AtomLayoutMS
-            );
+            if constexpr (MMA_N_SdP == 1) {
+                // Each warp covers 16 columns, i.e. half of a 16 x 32 dropout block.
+                int block_col16_idx = n_block * (kBlockN / 16) + warp_id / AtomLayoutMS;
+                dropout.template apply_dropout_16cols</*encode_dropout_in_sign_bit=*/true>(
+                    acc_s, block_row_idx, block_col16_idx, AtomLayoutMS
+                );
+            } else {
+                // Need col to be multiples of 32, since we're doing dropout with block of 16 x 32
+                static_assert(MMA_N_SdP % 2 == 0);
+                int block_col_idx = n_block * (kBlockN / 32) + (warp_id / AtomLayoutMS) * (MMA_N_SdP / 2);
+                dropout.template apply_dropout</*encode_dropout_in_sign_bit=*/true>(
+                    acc_s, block_row_idx, block_col_idx, AtomLayoutMS
+                );
+            }
         }
         // Convert scores from fp32 to fp16/bf16
         Tensor rP = !Is_dropout

@@ -61,6 +61,20 @@ void run_mha_bwd_<{DTYPE}, {HEAD_DIM}, {IS_CAUSAL}>(Flash_bwd_params &params, cu
 
 }} // namespace FLASH_NAMESPACE"""
 
+def get_bwd_dropout_smem99_template() -> str:
+    return NAMESPACE_INCLUDE + """#include "flash_bwd_launch_template.h"
+
+namespace FLASH_NAMESPACE {{
+
+#ifndef FLASHATTENTION_DISABLE_DROPOUT
+template<>
+void run_mha_bwd_hdim{HEAD_DIM}_dropout_smem99<{DTYPE}, {IS_CAUSAL}>(Flash_bwd_params &params, cudaStream_t stream) {{
+    run_flash_bwd<Flash_bwd_kernel_traits_hdim{HEAD_DIM}_smem99<{DTYPE}>, /*Is_dropout=*/true, {IS_CAUSAL}>(params, stream);
+}}
+#endif
+
+}} // namespace FLASH_NAMESPACE"""
+
 @dataclass
 class Kernel:
     sm: int
@@ -74,6 +88,7 @@ class Kernel:
         template_funcs = {
             "fwd": get_fwd_template,
             "bwd": get_bwd_template,
+            "bwd_dropout_smem99": get_bwd_dropout_smem99_template,
             "fwd_split": get_fwd_split_template,
             "fwd_split_align": get_fwd_split_align_template,
         }
@@ -92,6 +107,9 @@ def get_all_kernels() -> List[Kernel]:
     for direction in ["fwd", "fwd_split", "fwd_split_align", "bwd"]:
         for dtype, head_dim, is_causal, sm in itertools.product(DTYPE_MAP.keys(), HEAD_DIMENSIONS, IS_CAUSAL, SM):
             yield Kernel(sm=sm, dtype=dtype, head_dim=head_dim, is_causal=is_causal, direction=direction)
+    # Only hdim256 has a 99 KB smem config, whose dropout kernels get their own translation units.
+    for dtype, is_causal, sm in itertools.product(DTYPE_MAP.keys(), IS_CAUSAL, SM):
+        yield Kernel(sm=sm, dtype=dtype, head_dim=256, is_causal=is_causal, direction="bwd_dropout_smem99")
 
 def write_kernel(kernel: Kernel, autogen_dir: Path) -> None:
     prelude = """// Copyright (c) 2024, Tri Dao.

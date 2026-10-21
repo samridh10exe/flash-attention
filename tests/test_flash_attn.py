@@ -18,13 +18,9 @@ from flash_attn.bert_padding import pad_input, unpad_input
 from flash_attn.flash_attn_interface import _get_block_size_n, USE_TRITON_ROCM
 from flash_attn.layers.rotary import apply_rotary_emb
 
-MAX_HEADDIM_SM8x = 192
-
 
 is_sm75 = torch.cuda.get_device_capability("cuda") == (7, 5)
 is_sm8x = torch.cuda.get_device_capability("cuda")[0] == 8
-is_sm80 = torch.cuda.get_device_capability("cuda") == (8, 0)
-is_sm90 = torch.cuda.get_device_capability("cuda") == (9, 0)
 
 
 def attn_bias_from_alibi_slopes(
@@ -687,18 +683,17 @@ def test_flash_attn_qkvpacked(seqlen, d, dropout_p, causal, local, alibi, determ
     # do_o = (g.float() * out.float()).sum(-1)
     # dv_tmp = torch.einsum('bhts,bthd->bshd', attn_pt[:, :, :64], g[:, :64])
     # dv_tmp1 = torch.einsum('bhts,bthd->bshd', attn_pt[:, :, 64:], g[:, 64:])
-    if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-        (dqkv,) = torch.autograd.grad(out, qkv, g)
-        (dqkv_ref,) = torch.autograd.grad(out_ref, qkv, g)
-        (dqkv_pt,) = torch.autograd.grad(out_pt, qkv, g)
-        print(f"dQ max diff: {(dqkv[:, :, 0] - dqkv_ref[:, :, 0]).abs().max().item()}")
-        print(f"dK max diff: {(dqkv[:, :, 1] - dqkv_ref[:, :, 1]).abs().max().item()}")
-        print(f"dV max diff: {(dqkv[:, :, 2] - dqkv_ref[:, :, 2]).abs().max().item()}")
-        print(f"dQKV mean diff: {(dqkv - dqkv_ref).abs().mean().item()}")
-        print(f"dQ Pytorch max diff: {(dqkv_pt[:, :, 0] - dqkv_ref[:, :, 0]).abs().max().item()}")
-        print(f"dK Pytorch max diff: {(dqkv_pt[:, :, 1] - dqkv_ref[:, :, 1]).abs().max().item()}")
-        print(f"dV Pytorch max diff: {(dqkv_pt[:, :, 2] - dqkv_ref[:, :, 2]).abs().max().item()}")
-        print(f"dQKV Pytorch mean diff: {(dqkv_pt - dqkv_ref).abs().mean().item()}")
+    (dqkv,) = torch.autograd.grad(out, qkv, g)
+    (dqkv_ref,) = torch.autograd.grad(out_ref, qkv, g)
+    (dqkv_pt,) = torch.autograd.grad(out_pt, qkv, g)
+    print(f"dQ max diff: {(dqkv[:, :, 0] - dqkv_ref[:, :, 0]).abs().max().item()}")
+    print(f"dK max diff: {(dqkv[:, :, 1] - dqkv_ref[:, :, 1]).abs().max().item()}")
+    print(f"dV max diff: {(dqkv[:, :, 2] - dqkv_ref[:, :, 2]).abs().max().item()}")
+    print(f"dQKV mean diff: {(dqkv - dqkv_ref).abs().mean().item()}")
+    print(f"dQ Pytorch max diff: {(dqkv_pt[:, :, 0] - dqkv_ref[:, :, 0]).abs().max().item()}")
+    print(f"dK Pytorch max diff: {(dqkv_pt[:, :, 1] - dqkv_ref[:, :, 1]).abs().max().item()}")
+    print(f"dV Pytorch max diff: {(dqkv_pt[:, :, 2] - dqkv_ref[:, :, 2]).abs().max().item()}")
+    print(f"dQKV Pytorch mean diff: {(dqkv_pt - dqkv_ref).abs().mean().item()}")
 
     # Check that FlashAttention's numerical error is at most twice the numerical error
     # of a Pytorch implementation.
@@ -710,8 +705,7 @@ def test_flash_attn_qkvpacked(seqlen, d, dropout_p, causal, local, alibi, determ
         if not alibi:
             assert abs(dropout_fraction - dropout_p) <= (0.01 if not local else 0.025)
 
-    if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-        assert (dqkv - dqkv_ref).abs().max().item() <= 2 * (dqkv_pt - dqkv_ref).abs().max().item()
+    assert (dqkv - dqkv_ref).abs().max().item() <= 2 * (dqkv_pt - dqkv_ref).abs().max().item()
 
 
 @pytest.mark.parametrize("dtype", ([torch.float16] if is_sm75 else [torch.float16, torch.bfloat16]))
@@ -834,19 +828,18 @@ def test_flash_attn_varlen_qkvpacked(
         print(f"Attention Pytorch max diff: {(attn_pt - attn_ref).abs().max().item()}")
 
     g = torch.randn_like(out)
-    if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-        (dqkv_unpad,) = torch.autograd.grad(out, qkv_unpad, g)
-        dqkv = dqkv_pad_fn(dqkv_unpad)
-        (dqkv_ref,) = torch.autograd.grad(out_ref, qkv, g)
-        (dqkv_pt,) = torch.autograd.grad(out_pt, qkv, g)
-        print(f"dQ max diff: {(dqkv[:, :, 0] - dqkv_ref[:, :, 0]).abs().max().item()}")
-        print(f"dK max diff: {(dqkv[:, :, 1] - dqkv_ref[:, :, 1]).abs().max().item()}")
-        print(f"dV max diff: {(dqkv[:, :, 2] - dqkv_ref[:, :, 2]).abs().max().item()}")
-        print(f"dQKV mean diff: {(dqkv - dqkv_ref).abs().mean().item()}")
-        print(f"dQ Pytorch max diff: {(dqkv_pt[:, :, 0] - dqkv_ref[:, :, 0]).abs().max().item()}")
-        print(f"dK Pytorch max diff: {(dqkv_pt[:, :, 1] - dqkv_ref[:, :, 1]).abs().max().item()}")
-        print(f"dV Pytorch max diff: {(dqkv_pt[:, :, 2] - dqkv_ref[:, :, 2]).abs().max().item()}")
-        print(f"dQKV Pytorch mean diff: {(dqkv_pt - dqkv_ref).abs().mean().item()}")
+    (dqkv_unpad,) = torch.autograd.grad(out, qkv_unpad, g)
+    dqkv = dqkv_pad_fn(dqkv_unpad)
+    (dqkv_ref,) = torch.autograd.grad(out_ref, qkv, g)
+    (dqkv_pt,) = torch.autograd.grad(out_pt, qkv, g)
+    print(f"dQ max diff: {(dqkv[:, :, 0] - dqkv_ref[:, :, 0]).abs().max().item()}")
+    print(f"dK max diff: {(dqkv[:, :, 1] - dqkv_ref[:, :, 1]).abs().max().item()}")
+    print(f"dV max diff: {(dqkv[:, :, 2] - dqkv_ref[:, :, 2]).abs().max().item()}")
+    print(f"dQKV mean diff: {(dqkv - dqkv_ref).abs().mean().item()}")
+    print(f"dQ Pytorch max diff: {(dqkv_pt[:, :, 0] - dqkv_ref[:, :, 0]).abs().max().item()}")
+    print(f"dK Pytorch max diff: {(dqkv_pt[:, :, 1] - dqkv_ref[:, :, 1]).abs().max().item()}")
+    print(f"dV Pytorch max diff: {(dqkv_pt[:, :, 2] - dqkv_ref[:, :, 2]).abs().max().item()}")
+    print(f"dQKV Pytorch mean diff: {(dqkv_pt - dqkv_ref).abs().mean().item()}")
 
     # Check that FlashAttention's numerical error is at most twice the numerical error
     # of a Pytorch implementation.
@@ -858,8 +851,7 @@ def test_flash_attn_varlen_qkvpacked(
         if not alibi:
             assert abs(dropout_fraction - dropout_p) <= (0.01 if not local else 0.025)
 
-    if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-        assert (dqkv - dqkv_ref).abs().max().item() <= 2 * (dqkv_pt - dqkv_ref).abs().max().item()
+    assert (dqkv - dqkv_ref).abs().max().item() <= 2 * (dqkv_pt - dqkv_ref).abs().max().item()
 
 
 @pytest.mark.parametrize("kvpacked", [True, False])
@@ -1071,51 +1063,50 @@ def test_flash_attn_output(
 
     g = torch.randn_like(out)
     do_o = (g.float() * out.float()).sum(-1)
-    if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-        if kvpacked:
-            (
-                dq,
-                dkv,
-            ) = torch.autograd.grad(out, (q, kv), g)
-            dk, dv = dkv.unbind(2)
-            (
-                dq_ref,
-                dkv_ref,
-            ) = torch.autograd.grad(out_ref, (q, kv), g)
-            dk_ref, dv_ref = dkv_ref.unbind(2)
-            (
-                dq_pt,
-                dkv_pt,
-            ) = torch.autograd.grad(out_pt, (q, kv), g)
-            dk_pt, dv_pt = dkv_pt.unbind(2)
-        else:
-            (
-                dq,
-                dk,
-                dv,
-            ) = torch.autograd.grad(out, (q, k, v), g)
-            (
-                dq_ref,
-                dk_ref,
-                dv_ref,
-            ) = torch.autograd.grad(out_ref, (q, k, v), g)
-            (
-                dq_pt,
-                dk_pt,
-                dv_pt,
-            ) = torch.autograd.grad(out_pt, (q, k, v), g)
-        print(f"dQ max diff: {(dq - dq_ref).abs().max().item()}")
-        print(f"dK max diff: {(dk - dk_ref).abs().max().item()}")
-        print(f"dV max diff: {(dv - dv_ref).abs().max().item()}")
-        print(f"dQ mean diff: {(dq - dq_ref).abs().mean().item()}")
-        print(f"dK mean diff: {(dk - dk_ref).abs().mean().item()}")
-        print(f"dV mean diff: {(dv - dv_ref).abs().mean().item()}")
-        print(f"dQ Pytorch max diff: {(dq_pt - dq_ref).abs().max().item()}")
-        print(f"dK Pytorch max diff: {(dk_pt - dk_ref).abs().max().item()}")
-        print(f"dV Pytorch max diff: {(dv_pt - dv_ref).abs().max().item()}")
-        print(f"dQ Pytorch mean diff: {(dq_pt - dq_ref).abs().mean().item()}")
-        print(f"dK Pytorch mean diff: {(dk_pt - dk_ref).abs().mean().item()}")
-        print(f"dV Pytorch mean diff: {(dv_pt - dv_ref).abs().mean().item()}")
+    if kvpacked:
+        (
+            dq,
+            dkv,
+        ) = torch.autograd.grad(out, (q, kv), g)
+        dk, dv = dkv.unbind(2)
+        (
+            dq_ref,
+            dkv_ref,
+        ) = torch.autograd.grad(out_ref, (q, kv), g)
+        dk_ref, dv_ref = dkv_ref.unbind(2)
+        (
+            dq_pt,
+            dkv_pt,
+        ) = torch.autograd.grad(out_pt, (q, kv), g)
+        dk_pt, dv_pt = dkv_pt.unbind(2)
+    else:
+        (
+            dq,
+            dk,
+            dv,
+        ) = torch.autograd.grad(out, (q, k, v), g)
+        (
+            dq_ref,
+            dk_ref,
+            dv_ref,
+        ) = torch.autograd.grad(out_ref, (q, k, v), g)
+        (
+            dq_pt,
+            dk_pt,
+            dv_pt,
+        ) = torch.autograd.grad(out_pt, (q, k, v), g)
+    print(f"dQ max diff: {(dq - dq_ref).abs().max().item()}")
+    print(f"dK max diff: {(dk - dk_ref).abs().max().item()}")
+    print(f"dV max diff: {(dv - dv_ref).abs().max().item()}")
+    print(f"dQ mean diff: {(dq - dq_ref).abs().mean().item()}")
+    print(f"dK mean diff: {(dk - dk_ref).abs().mean().item()}")
+    print(f"dV mean diff: {(dv - dv_ref).abs().mean().item()}")
+    print(f"dQ Pytorch max diff: {(dq_pt - dq_ref).abs().max().item()}")
+    print(f"dK Pytorch max diff: {(dk_pt - dk_ref).abs().max().item()}")
+    print(f"dV Pytorch max diff: {(dv_pt - dv_ref).abs().max().item()}")
+    print(f"dQ Pytorch mean diff: {(dq_pt - dq_ref).abs().mean().item()}")
+    print(f"dK Pytorch mean diff: {(dk_pt - dk_ref).abs().mean().item()}")
+    print(f"dV Pytorch mean diff: {(dv_pt - dv_ref).abs().mean().item()}")
 
     # Check that FlashAttention's numerical error is at most twice the numerical error
     # of a Pytorch implementation.
@@ -1127,10 +1118,9 @@ def test_flash_attn_output(
         if not alibi:
             assert abs(dropout_fraction - dropout_p) <= (0.01 if not local else 0.025)
 
-    if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-        assert (dq - dq_ref).abs().max().item() <= 3 * (dq_pt - dq_ref).abs().max().item()
-        assert (dk - dk_ref).abs().max().item() <= 3 * (dk_pt - dk_ref).abs().max().item()
-        assert (dv - dv_ref).abs().max().item() <= 3 * (dv_pt - dv_ref).abs().max().item()
+    assert (dq - dq_ref).abs().max().item() <= 3 * (dq_pt - dq_ref).abs().max().item()
+    assert (dk - dk_ref).abs().max().item() <= 3 * (dk_pt - dk_ref).abs().max().item()
+    assert (dv - dv_ref).abs().max().item() <= 3 * (dv_pt - dv_ref).abs().max().item()
 
 
 @pytest.mark.parametrize("kvpacked", [True, False])
@@ -1387,54 +1377,53 @@ def test_flash_attn_varlen_output(
         print(f"Attention Pytorch max diff: {(attn_pt - attn_ref).abs().max().item()}")
 
     g = torch.randn_like(out)
-    if ((d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90)):
-        if kvpacked:
-            (
-                dq_unpad,
-                dkv_unpad,
-            ) = torch.autograd.grad(out, (q_unpad, kv_unpad), g)
-            dk, dv = dkv_pad_fn(dkv_unpad).unbind(2)
-            (
-                dq_ref,
-                dkv_ref,
-            ) = torch.autograd.grad(out_ref, (q, kv), g)
-            dk_ref, dv_ref = dkv_ref.unbind(2)
-            (
-                dq_pt,
-                dkv_pt,
-            ) = torch.autograd.grad(out_pt, (q, kv), g)
-            dk_pt, dv_pt = dkv_pt.unbind(2)
-        else:
-            (
-                dq_unpad,
-                dk_unpad,
-                dv_unpad,
-            ) = torch.autograd.grad(out, (q_unpad, k_unpad, v_unpad), g)
-            dk = dk_pad_fn(dk_unpad)
-            dv = dk_pad_fn(dv_unpad)
-            (
-                dq_ref,
-                dk_ref,
-                dv_ref,
-            ) = torch.autograd.grad(out_ref, (q, k, v), g)
-            (
-                dq_pt,
-                dk_pt,
-                dv_pt,
-            ) = torch.autograd.grad(out_pt, (q, k, v), g)
-        dq = dq_pad_fn(dq_unpad)
-        print(f"dQ max diff: {(dq - dq_ref).abs().max().item()}")
-        print(f"dK max diff: {(dk - dk_ref).abs().max().item()}")
-        print(f"dV max diff: {(dv - dv_ref).abs().max().item()}")
-        print(f"dQ mean diff: {(dq - dq_ref).abs().mean().item()}")
-        print(f"dK mean diff: {(dk - dk_ref).abs().mean().item()}")
-        print(f"dV mean diff: {(dv - dv_ref).abs().mean().item()}")
-        print(f"dQ Pytorch max diff: {(dq_pt - dq_ref).abs().max().item()}")
-        print(f"dK Pytorch max diff: {(dk_pt - dk_ref).abs().max().item()}")
-        print(f"dV Pytorch max diff: {(dv_pt - dv_ref).abs().max().item()}")
-        print(f"dQ Pytorch mean diff: {(dq_pt - dq_ref).abs().mean().item()}")
-        print(f"dK Pytorch mean diff: {(dk_pt - dk_ref).abs().mean().item()}")
-        print(f"dV Pytorch mean diff: {(dv_pt - dv_ref).abs().mean().item()}")
+    if kvpacked:
+        (
+            dq_unpad,
+            dkv_unpad,
+        ) = torch.autograd.grad(out, (q_unpad, kv_unpad), g)
+        dk, dv = dkv_pad_fn(dkv_unpad).unbind(2)
+        (
+            dq_ref,
+            dkv_ref,
+        ) = torch.autograd.grad(out_ref, (q, kv), g)
+        dk_ref, dv_ref = dkv_ref.unbind(2)
+        (
+            dq_pt,
+            dkv_pt,
+        ) = torch.autograd.grad(out_pt, (q, kv), g)
+        dk_pt, dv_pt = dkv_pt.unbind(2)
+    else:
+        (
+            dq_unpad,
+            dk_unpad,
+            dv_unpad,
+        ) = torch.autograd.grad(out, (q_unpad, k_unpad, v_unpad), g)
+        dk = dk_pad_fn(dk_unpad)
+        dv = dk_pad_fn(dv_unpad)
+        (
+            dq_ref,
+            dk_ref,
+            dv_ref,
+        ) = torch.autograd.grad(out_ref, (q, k, v), g)
+        (
+            dq_pt,
+            dk_pt,
+            dv_pt,
+        ) = torch.autograd.grad(out_pt, (q, k, v), g)
+    dq = dq_pad_fn(dq_unpad)
+    print(f"dQ max diff: {(dq - dq_ref).abs().max().item()}")
+    print(f"dK max diff: {(dk - dk_ref).abs().max().item()}")
+    print(f"dV max diff: {(dv - dv_ref).abs().max().item()}")
+    print(f"dQ mean diff: {(dq - dq_ref).abs().mean().item()}")
+    print(f"dK mean diff: {(dk - dk_ref).abs().mean().item()}")
+    print(f"dV mean diff: {(dv - dv_ref).abs().mean().item()}")
+    print(f"dQ Pytorch max diff: {(dq_pt - dq_ref).abs().max().item()}")
+    print(f"dK Pytorch max diff: {(dk_pt - dk_ref).abs().max().item()}")
+    print(f"dV Pytorch max diff: {(dv_pt - dv_ref).abs().max().item()}")
+    print(f"dQ Pytorch mean diff: {(dq_pt - dq_ref).abs().mean().item()}")
+    print(f"dK Pytorch mean diff: {(dk_pt - dk_ref).abs().mean().item()}")
+    print(f"dV Pytorch mean diff: {(dv_pt - dv_ref).abs().mean().item()}")
 
     # Check that FlashAttention's numerical error is at most twice the numerical error
     # of a Pytorch implementation.
@@ -1446,10 +1435,9 @@ def test_flash_attn_varlen_output(
         if not alibi:
             assert abs(dropout_fraction - dropout_p) <= (0.01 if not local else 0.04)
 
-    if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-        assert (dq - dq_ref).abs().max().item() <= 3 * (dq_pt - dq_ref).abs().max().item()
-        assert (dk - dk_ref).abs().max().item() <= 3 * (dk_pt - dk_ref).abs().max().item()
-        assert (dv - dv_ref).abs().max().item() <= 3 * (dv_pt - dv_ref).abs().max().item()
+    assert (dq - dq_ref).abs().max().item() <= 3 * (dq_pt - dq_ref).abs().max().item()
+    assert (dk - dk_ref).abs().max().item() <= 3 * (dk_pt - dk_ref).abs().max().item()
+    assert (dv - dv_ref).abs().max().item() <= 3 * (dv_pt - dv_ref).abs().max().item()
 
 
 @pytest.mark.parametrize("dtype", ([torch.float16] if is_sm75 else [torch.float16, torch.bfloat16]))
@@ -2209,14 +2197,13 @@ def test_flash_attn_race_condition(seqlen_q, seqlen_k, d, dropout_p, causal, dty
     torch.random.manual_seed(42)
     out0, lse0, _ = flash_attn_func(q, k, v, dropout_p, causal=causal, return_attn_probs=True)
     g = torch.randn_like(out0)
-    if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-        (
-            dq0,
-            dk0,
-            dv0,
-        ) = torch.autograd.grad(out0, (q, k, v), g)
-        # Numerical error if we just do any arithmetic on dq
-        dq_atol = 2 * ((dq0 + 0.3 - 0.3) - dq0).abs().max().item()
+    (
+        dq0,
+        dk0,
+        dv0,
+    ) = torch.autograd.grad(out0, (q, k, v), g)
+    # Numerical error if we just do any arithmetic on dq
+    dq_atol = 2 * ((dq0 + 0.3 - 0.3) - dq0).abs().max().item()
 
     for i in range(250):
         torch.random.manual_seed(42)
@@ -2224,18 +2211,17 @@ def test_flash_attn_race_condition(seqlen_q, seqlen_k, d, dropout_p, causal, dty
         assert torch.equal(out, out0)
         assert torch.equal(lse, lse0)
 
-        if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
-            (
-                dq,
-                dk,
-                dv,
-            ) = torch.autograd.grad(out, (q, k, v), g)
-            dq_equal = torch.allclose(dq, dq0, atol=dq_atol)
-            if not dq_equal:
-                print(f"Iter {i}, {dq_atol = }, dQ max diff: {(dq - dq0).abs().max().item()}")
-            assert torch.equal(dv, dv0)
-            assert torch.equal(dk, dk0)
-            assert dq_equal
+        (
+            dq,
+            dk,
+            dv,
+        ) = torch.autograd.grad(out, (q, k, v), g)
+        dq_equal = torch.allclose(dq, dq0, atol=dq_atol)
+        if not dq_equal:
+            print(f"Iter {i}, {dq_atol = }, dQ max diff: {(dq - dq0).abs().max().item()}")
+        assert torch.equal(dv, dv0)
+        assert torch.equal(dk, dk0)
+        assert dq_equal
 
 
 @pytest.mark.parametrize("dtype", [torch.float16])

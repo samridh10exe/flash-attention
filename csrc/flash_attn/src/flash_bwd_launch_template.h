@@ -281,6 +281,14 @@ void run_mha_bwd_hdim192(Flash_bwd_params &params, cudaStream_t stream) {
     });
 }
 
+template<typename T>
+using Flash_bwd_kernel_traits_hdim256_smem99 = Flash_bwd_kernel_traits<256, 64, 32, 8, 4, 1, 2, true, true, T>;
+
+// Defined in flash_bwd_dropout_smem99_hdim256_*.cu. Instantiating these kernels in the hdim256 bwd
+// translation units changes the codegen of the other kernels there (~12% slower hdim256 bwd on H100).
+template<typename T, bool Is_causal>
+void run_mha_bwd_hdim256_dropout_smem99(Flash_bwd_params &params, cudaStream_t stream);
+
 template<typename T, bool Is_causal>
 void run_mha_bwd_hdim256(Flash_bwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 256;
@@ -297,9 +305,11 @@ void run_mha_bwd_hdim256(Flash_bwd_params &params, cudaStream_t stream) {
             run_flash_bwd<Flash_bwd_kernel_traits<Headdim, 64, 64, 8, 4, 2, 2, false, false, T>, Is_dropout, Is_causal>(params, stream);
         } else if (max_smem_per_block >= 144 * 1024) {  // A100, we don't do double buffering to save smem
             run_flash_bwd<Flash_bwd_kernel_traits<Headdim, 64, 64, 8, 4, 2, 2, false, true, T>, Is_dropout, Is_causal>(params, stream);
-        } else { // sm86 and sm89, max smem is 99 KB. Only works without dropout. V in regs and no double buffering.
+        } else { // sm86, sm89 and sm120, max smem is 99 KB. V in regs and no double buffering.
             if constexpr (!Is_dropout) {
-                run_flash_bwd<Flash_bwd_kernel_traits<Headdim, 64, 32, 8, 4, 1, 2, true, true, T>, false, Is_causal>(params, stream);
+                run_flash_bwd<Flash_bwd_kernel_traits_hdim256_smem99<T>, false, Is_causal>(params, stream);
+            } else {
+                run_mha_bwd_hdim256_dropout_smem99<T, Is_causal>(params, stream);
             }
         }
     });

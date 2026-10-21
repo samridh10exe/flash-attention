@@ -90,6 +90,34 @@ struct Dropout {
         }
     }
 
+    // For a (4, MMA_M, 2) fragment that spans 16 columns, i.e. half of a 16 x 32 block, with
+    // block_col16_start in units of 16 columns. The whole block is generated and the other half
+    // (owned by the neighboring warp) is discarded, so the mask matches apply_dropout.
+    template <bool encode_dropout_in_sign_bit=false, typename Engine, typename Layout>
+    __forceinline__ __device__ void apply_dropout_16cols(Tensor<Engine, Layout> &tensor_,
+                                         int block_row_start, int block_col16_start, int block_row_stride) {
+        // convert shape from (4, MMA_M, 2) to (8, MMA_M, 1)
+        Tensor tensor = make_tensor(tensor_.data(), FLASH_NAMESPACE::convert_layout_acc_dropout(tensor_.layout()));
+        using T = typename Engine::value_type;
+        auto encode_dropout = [](bool keep, T val) {
+            return keep ? val : (encode_dropout_in_sign_bit ? -val : T(0));
+        };
+        static_assert(decltype(size<2>(tensor))::value == 1);
+        const uint32_t block_col_start = uint32_t(block_col16_start) >> 1;
+        const bool second_half = block_col16_start & 1;
+        #pragma unroll
+        for (int m = 0; m < size<1>(tensor); ++m, block_row_start += block_row_stride) {
+            uint2 rowcol = make_uint2(block_row_start, block_col_start);
+            uint4 random_uint4 = FLASH_NAMESPACE::philox(seed, reinterpret_cast<unsigned long long&>(rowcol), offset);
+            uint2 random_uint2 = second_half ? make_uint2(random_uint4.z, random_uint4.w) : make_uint2(random_uint4.x, random_uint4.y);
+            uint8_t (&rnd_8)[8] = reinterpret_cast<uint8_t (&)[8]>(random_uint2);
+            #pragma unroll
+            for (int i = 0; i < 8; i++) {
+                tensor(i, m, 0) = encode_dropout(rnd_8[i] <= p_dropout_in_uint8_t, tensor(i, m, 0));
+            }
+        }
+    }
+
 };
 
 } // namespace FLASH_NAMESPACE
