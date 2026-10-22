@@ -1443,8 +1443,9 @@ def test_flash_attn_varlen_output(
     if dropout_p > 0.0:
         assert (attn - attn_ref).abs().max().item() <= 2 * (attn_pt - attn_ref).abs().max().item()
         # With alibi, many of the prob values are 0.0 & -0.0 so dropout_fraction isn't accurate
+        # seqlen_q=1 gives only ~3k samples (binomial std ~0.0066), too few for a 0.01 tolerance
         if not alibi:
-            assert abs(dropout_fraction - dropout_p) <= (0.01 if not local else 0.04)
+            assert abs(dropout_fraction - dropout_p) <= (0.01 if not local and seqlen_q > 1 else 0.04)
 
     if (d <= MAX_HEADDIM_SM8x or dropout_p == 0) or (is_sm80 or is_sm90):
         assert (dq - dq_ref).abs().max().item() <= 3 * (dq_pt - dq_ref).abs().max().item()
