@@ -2537,6 +2537,7 @@ class BwdHeuristicInputs(NamedTuple):
     bwd_pack_gqa_heuristic); max_seqlen_q / max_seqlen_k are the mean sequence length for
     varlen calls without a host bound (the total, as an upper bound, refuses every causal
     fold), and num_sms is 0 where the chooser does not run (bwd_selection_reads_num_sms).
+    The local window sizes also feed only the fold chooser.
     """
 
     device_arch: int
@@ -2554,6 +2555,8 @@ class BwdHeuristicInputs(NamedTuple):
     has_cu_seqlens: bool = False  # cu_seqlens_q or cu_seqlens_k
     causal: bool = False
     local: bool = False
+    window_size_left: int | None = None
+    window_size_right: int | None = None
     deterministic: bool = False
     use_block_sparsity: bool = False
     sparse_block_size_q: int | None = None
@@ -2742,7 +2745,9 @@ def bwd_pack_gqa_heuristic(
     postprocess) keeps half of that saving: hdim 128 / 64 MQA 16/1 and GQA 32/2 pack 4
     (kv_group 4 / 8) causal gain +7..+10% at 2k, +1..+5% at 4k and lose 2..3% at 8k, where the
     full-pack model still packs; two sub-groups keep the saving (hdim 192 GQA 32/8 pack 2 +3%
-    at 8k causal, hdim 128 GQA 64/8 pack 4 within 2% of unpacked there).
+    at 8k causal, hdim 128 GQA 64/8 pack 4 within 2% of unpacked there). A KV tile only meets
+    the Q rows inside a local window, so the gain uses the window span instead of seqlen_q:
+    hdim 128 GQA 32/8 and 64/8 with a 512..4k window gain +8..+32% packed at 16k and 32k.
 
     A packed tile also loops over qhead_per_kvhead times more Q rows, so the longest packed CTA
     runs qh * ceil(seqlen_q / tile_m) iterations (every KV tile, or the first one with causal).
@@ -2779,7 +2784,9 @@ def bwd_pack_gqa_heuristic(
 
     ctas_unpacked = batch_size * inputs.num_heads * n_blocks_kv * cluster_size
     ctas_packed = batch_size * inputs.num_heads_kv * n_blocks_kv * cluster_size
-    gain = 0.25 * 2048 / max(seqlen_q, 1)
+    wl, wr = inputs.window_size_left, inputs.window_size_right
+    q_span = seqlen_q if wl is None or wr is None else min(seqlen_q, wl + wr + kv_tile)
+    gain = 0.25 * 2048 / max(q_span, 1)
     if kv_group >= 4:
         gain *= 0.5
     if inputs.causal or inputs.local:
