@@ -2217,6 +2217,7 @@ def _flash_attn_bwd(
 
     inputs = _get_bwd_inputs(
         arch=arch, device_index=q.device.index, causal=causal, local=local,
+        window_size_left=window_size_left, window_size_right=window_size_right,
         deterministic=deterministic, dtype=str(q.dtype), head_dim=head_dim,
         head_dim_v=head_dim_v, num_heads=num_head, num_heads_kv=num_head_kv, batch_size=batch_size,
         total_q=total_q, total_k=total_k,

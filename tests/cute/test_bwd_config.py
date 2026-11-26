@@ -791,6 +791,19 @@ def test_bwd_pack_gqa_heuristic_partial_pack_keeps_half_the_gain():
     )
 
 
+def test_bwd_pack_gqa_heuristic_local_window():
+    """hdim 128 GQA 32/8 at 16k: a 4k window bounds the work per KV tile, so it packs."""
+    inputs = BwdHeuristicInputs(
+        dtype="torch.bfloat16",
+        device_arch=100, head_dim=128, head_dim_v=128, num_heads=32, num_heads_kv=8,
+        num_sms=148, batch_size=2, max_seqlen_q=16384, max_seqlen_k=16384,
+        total_q=2 * 16384, total_k=2 * 16384, local=True,
+    )
+    assert not bwd_pack_gqa_heuristic(inputs, tile_m=128, tile_n=128, cluster_size=2)
+    windowed = inputs._replace(window_size_left=4095, window_size_right=0)
+    assert bwd_pack_gqa_heuristic(windowed, tile_m=128, tile_n=128, cluster_size=2)
+
+
 # Interface: these run on CPU with fake tensors and stop at the compile-cache lookup.
 torch = pytest.importorskip("torch")
 
