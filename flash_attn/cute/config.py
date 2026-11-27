@@ -1335,6 +1335,13 @@ class SwapABPolicy:
     def seqlen_k_capacity(self, inputs: FwdHeuristicInputs) -> int:
         return inputs.max_seqlen_k if inputs.seqlen_k_capacity is None else inputs.seqlen_k_capacity
 
+    def split_seqlen_k(self, inputs: FwdHeuristicInputs) -> int:
+        """Keys the decode query sees: the capacity, or its local window if smaller."""
+        seqlen_k = self.seqlen_k_capacity(inputs)
+        if inputs.local and inputs.window_size_left is not None:
+            seqlen_k = min(seqlen_k, max(inputs.window_size_left + 1, 0))
+        return seqlen_k
+
     def slower_than_standard(self, inputs: FwdHeuristicInputs) -> bool:
         """Measured SwapAB losses that automatic selection avoids; see short_kv_max_tokens."""
         return (
@@ -1348,10 +1355,15 @@ class SwapABPolicy:
 
         Lengths vary per sequence with varlen Q or seqused_k (the SwapAB tile scheduler reads the
         counts for dense Q too), but only a capacity of per_sequence_min_capacity tokens leaves
-        room for the counts to pay for the prepare launch.
+        room for the counts to pay for the prepare launch. A local window under split_min_blocks
+        KV blocks keeps the static count, which measured faster.
         """
         lengths_vary = inputs.is_varlen_q or inputs.has_seqused_k
-        return lengths_vary and self.seqlen_k_capacity(inputs) >= self.per_sequence_min_capacity
+        return (
+            lengths_vary
+            and self.seqlen_k_capacity(inputs) >= self.per_sequence_min_capacity
+            and self.split_seqlen_k(inputs) >= self.split_min_blocks * self.tile_n
+        )
 
     def needs_split_metadata(self, inputs: FwdHeuristicInputs, num_splits: int) -> bool:
         """Whether SwapAB prepares per-sequence split counts and launches split-major."""
@@ -1359,7 +1371,7 @@ class SwapABPolicy:
 
     def select_num_splits(self, inputs: FwdHeuristicInputs) -> int:
         """Automatic split count; with per-sequence splits, the cap of the per-sequence counts."""
-        seqlen_k = self.seqlen_k_capacity(inputs)
+        seqlen_k = self.split_seqlen_k(inputs)
         bh = inputs.batch_size * inputs.num_heads_kv
         # An empty batch has no tiles to split, as in num_splits_heuristic.
         if bh == 0:

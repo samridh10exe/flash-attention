@@ -1119,6 +1119,7 @@ def _flash_attn_fwd(
             total_q=total_q if cu_seqlens_q is not None else None,
             use_clc_scheduler=config.use_clc_scheduler,
             **(SWAPAB.split_policy(head_dim) if use_swapab else {}),
+            decode_window_size_left=window_size_left if use_swapab and local else None,
         )
 
     has_scheduler_metadata = scheduler_metadata is not None and not disable_scheduler_metadata
@@ -4388,6 +4389,7 @@ def _get_scheduler_metadata(
     use_clc_scheduler: bool = False,
     ctas_per_sm: int = 1,
     min_blocks_floor: Optional[Tuple[int, int]] = None,
+    decode_window_size_left: Optional[int] = None,
 ) -> SchedulerMetadataTensorsTorch:
     device = None
     for t in [cu_seqlens_q, cu_seqlens_k, seqused_q, seqused_k]:
@@ -4464,6 +4466,7 @@ def _get_scheduler_metadata(
             zfill_padded_output,
             ctas_per_sm,
             min_blocks_floor,
+            decode_window_size_left is not None,
         )
 
         if _needs_compile(_get_scheduler_metadata.compile_cache, cache_key):
@@ -4529,6 +4532,7 @@ def _get_scheduler_metadata(
                 virtual_batch_idx_cute,
                 num_nheads_in_l2_cute,
                 n_blocks_per_split,
+                decode_window_size_left,
                 cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
                 options="--enable-tvm-ffi",
             )
@@ -4552,6 +4556,7 @@ def _get_scheduler_metadata(
                 virtual_batch_idx,
                 num_nheads_in_l2,
                 n_blocks_per_split,
+                decode_window_size_left,
             )
     else:
         num_m_blocks = None
