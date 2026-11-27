@@ -229,6 +229,11 @@ def test_split_count_bounds():
          True, 6),
         ({"has_seqused_k": True, "batch_size": 296, "total_q": 296, "max_seqlen_k": 262144},
          True, 2),
+        # A local window bounds the keys each query sees, so it bounds the splits too.
+        ({"has_seqused_k": True, "page_size": 256, "max_seqlen_k": 131072, "causal": True,
+          "local": True, "window_size_left": 1023, "window_size_right": 0}, False, 2),
+        ({"has_seqused_k": True, "page_size": 256, "max_seqlen_k": 131072, "causal": True,
+          "local": True, "window_size_left": 4095, "window_size_right": 0}, True, 16),
         # Without used lengths every sequence has the full length: static splits.
         ({"max_seqlen_k": 262144}, False, 8),
         # One split needs no counts.

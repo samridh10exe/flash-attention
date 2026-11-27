@@ -728,6 +728,31 @@ def test_per_sequence_splits_follow_lengths(combine_split_counts):
     assert 1 < counts[3] < counts[4] <= 32
 
 
+@maybe_fake_tensor_mode(USE_FAKE_TENSOR)
+def test_per_sequence_splits_follow_window(combine_split_counts):
+    """A sequence's split count follows the KV blocks of its local window, not its length."""
+    q, k, v, table, used = ragged_paged_inputs(RAGGED_LENGTHS)
+    runs = []
+    for window in (4095, 32767):
+        o, lse, *_ = _flash_attn_fwd(
+            q, k, v, page_table=table, seqused_k=used, num_splits=0, return_lse=True,
+            window_size_left=window,
+        )
+        runs.append((window, o, lse, combine_split_counts[-1]))
+    if is_fake_mode():
+        return
+    for window, o, lse, counts in runs:
+        ref = decode_reference(q, k, v, page_table=table, seqused=used, window=window)
+        assert_decode_close(o, lse, ref)
+        counts = counts.tolist()
+        # Blocks of the window, as BlockInfo.get_n_block_min_max walks them (256-token blocks).
+        blocks = [-(-n // 256) - max(n - 1 - window, 0) // 256 for n in RAGGED_LENGTHS]
+        assert all(c <= max(b, 1) for c, b in zip(counts, blocks)), (window, counts, blocks)
+    # One compiled prepare kernel serves both: the window is a runtime argument.
+    narrow, wide = (run[3].tolist() for run in runs)
+    assert wide[4] > narrow[4], (narrow, wide)
+
+
 # Varlen Q replay steps: (cu_seqlens_q, seqused_k). An empty-query sequence moves between
 # replays; the trailing token then belongs to no sequence. The lengths move the split counts and
 # which split owns a partial last KV block; the last step ends every sequence on a block boundary.

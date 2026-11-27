@@ -154,8 +154,10 @@ class FlashPrepareScheduler:
         virtual_batch_idx_ptr: Optional[cute.Tensor],
         num_nheads_in_l2_ptr: Optional[cute.Tensor],
         n_blocks_per_split: Optional[int],  # overrides heuristic
+        window_size_left: Int32 | int | None,
         stream: cuda.CUstream,
     ):
+        window_size_left = Int32(window_size_left) if window_size_left is not None else None
         tile_m_divmod = FastDivmodDivisorV2(self.tile_m)
         tile_n_divmod = FastDivmodDivisorV2(self.tile_n)
 
@@ -192,6 +194,7 @@ class FlashPrepareScheduler:
             virtual_batch_idx_ptr,
             num_nheads_in_l2_ptr,
             n_blocks_per_split,
+            window_size_left,
         ).launch(
             grid=grid,
             block=block,
@@ -222,6 +225,7 @@ class FlashPrepareScheduler:
         virtual_batch_idx_ptr: Optional[cute.Tensor],
         num_nheads_in_l2_ptr: Optional[cute.Tensor],
         n_blocks_per_split: Optional[Int32],
+        window_size_left: Optional[Int32],
     ):
         bidx, _, _ = cute.arch.block_idx()
         # Let a PDL-launched consumer (SwapAB) start while this kernel runs; it waits for the
@@ -270,6 +274,7 @@ class FlashPrepareScheduler:
             mLeftPadK,
             tile_n_divmod,
             num_batch,
+            window_size_left,
         )
 
         num_splits_dynamic = Int32(1)
@@ -369,6 +374,7 @@ class FlashPrepareScheduler:
         mLeftPadK: Optional[cute.Tensor],
         tile_n_divmod: FastDivmodDivisorV2,
         num_batch: Int32,
+        window_size_left: Optional[Int32],
     ):
         leftpad_k = (
             mLeftPadK[batch_idx]
@@ -403,8 +409,13 @@ class FlashPrepareScheduler:
         else:
             seqlen_new = seqlen_k_new_static
         seqlen = seqlen - leftpad_k + seqlen_new
+        num_n_blocks = (seqlen + self.tile_n - 1) // tile_n_divmod
+        # The decode query sits at the last key: count the window's blocks, as in
+        # BlockInfo.get_n_block_min_max.
+        if const_expr(window_size_left is not None):
+            num_n_blocks -= cutlass.max(seqlen - 1 - window_size_left, Int32(0)) // tile_n_divmod
         return (
-            (seqlen + self.tile_n - 1) // tile_n_divmod
+            num_n_blocks
             if batch_idx < num_batch and lane_idx < self.k_num_batch_per_warp
             else Int32(0)
         )
